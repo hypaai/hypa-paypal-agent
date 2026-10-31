@@ -47,6 +47,7 @@ export class FakePaymentProvider implements PaymentProvider {
       const payload = JSON.parse(rawBody) as {
         eventId?: string;
         providerRef?: string;
+        eventType?: string;
         status?: PaymentStatus;
       };
       if (
@@ -63,6 +64,7 @@ export class FakePaymentProvider implements PaymentProvider {
         event: {
           eventId: payload.eventId,
           providerRef: payload.providerRef,
+          eventType: payload.eventType ?? 'FAKE.PAYMENT.UPDATED',
           status: payload.status,
         },
       };

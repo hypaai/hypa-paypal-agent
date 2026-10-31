@@ -13,6 +13,18 @@ export interface PaymentItem {
   unitPrice: string;
 }
 
+/** A merchant's review card. The model may propose an order, but only the
+ * signed-in merchant can approve it through the commerce API. */
+export interface ApprovalEvent {
+  orderId: string;
+  amount: string;
+  currency: string;
+  fee: { amount: string; currency: string };
+  customer: { name: string; contact: string; language: string | null };
+  items: PaymentItem[];
+  merchantLanguage: string;
+}
+
 export interface PaymentProvider {
   id: 'paypal';
   createCheckout(input: {
@@ -30,6 +42,13 @@ export interface PaymentProvider {
     idempotencyKey: string,
   ): Promise<{ status: Exclude<PaymentStatus, 'pending'> }>;
   getStatus(providerRef: string): Promise<PaymentStatus>;
+  /**
+   * Checks the transmission signature. `valid` answers only that question: an
+   * event whose signature verifies is valid even when this library does not
+   * map it to a payment status, so a caller can tell a forged event from one
+   * it simply does not act on. `status` is set only for the event types that
+   * move a payment; `eventType` is always the provider's own name for it.
+   */
   verifyWebhook(
     headers: Record<string, string>,
     rawBody: string,
@@ -38,7 +57,8 @@ export interface PaymentProvider {
     event?: {
       eventId: string;
       providerRef: string;
-      status: PaymentStatus;
+      eventType: string;
+      status?: PaymentStatus;
     };
   }>;
 }

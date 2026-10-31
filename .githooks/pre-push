@@ -1,0 +1,14 @@
+#!/bin/sh
+# Blocks the push if any pushed commit's tree carries the PolinRider loader.
+zero=0000000000000000000000000000000000000000
+while read -r _ local_sha remote_ref _; do
+  if [ "$remote_ref" = refs/heads/main ]; then
+    echo "Push blocked: main only changes through a pull request."
+    exit 1
+  fi
+  [ "$local_sha" = "$zero" ] && continue
+  "$(dirname "$0")/polinrider-scan.sh" "$local_sha" || {
+    echo "Push blocked: possible PolinRider malware. Do not install, build or run tests."
+    exit 1
+  }
+done

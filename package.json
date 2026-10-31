@@ -1,6 +1,6 @@
 {
   "name": "@hypa/paypal-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Open payment provider contracts and PayPal Orders v2 adapter",
   "type": "module",
   "license": "MIT",
@@ -14,10 +14,17 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
     "demo": "tsx demo.ts"
   },
-  "files": ["dist", "README.md", "LICENSE", ".env.example"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    ".env.example"
+  ],
   "devDependencies": {
+    "@types/node": "^22.15.30",
     "tsx": "^4.21.0",
     "typescript": "^5.7.3"
   },

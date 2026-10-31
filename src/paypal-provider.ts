@@ -20,10 +20,55 @@ type PayPalWebhookEvent = {
   };
 };
 
+/** Event types that move a payment. Anything else verifies but has no status. */
+const WEBHOOK_EVENT_STATUS: Record<string, PaymentStatus> = {
+  'PAYMENT.CAPTURE.COMPLETED': 'paid',
+  'PAYMENT.CAPTURE.DENIED': 'failed',
+  'PAYMENT.CAPTURE.DECLINED': 'failed',
+  'CHECKOUT.ORDER.APPROVED': 'pending',
+  'CHECKOUT.ORDER.CREATED': 'pending',
+  'PAYMENT.CAPTURE.PENDING': 'pending',
+};
+
+const decimalPlaces = (value: string) => (value.split('.')[1] ?? '').length;
+
+const scaled = (value: string, places: number) => {
+  const [whole, fraction = ''] = value.split('.');
+  return BigInt(whole + fraction.padEnd(places, '0'));
+};
+
+/**
+ * PayPal rejects a purchase unit that lists `items` without
+ * `amount.breakdown.item_total`, so the breakdown is required here. The items
+ * must add up to the order amount exactly; decimal strings are compared as
+ * integers so no float rounding can creep in.
+ */
+const assertItemsMatchAmount = (
+  items: { qty: number; unitPrice: string }[],
+  amount: string,
+) => {
+  const places = Math.max(
+    decimalPlaces(amount),
+    ...items.map((item) => decimalPlaces(item.unitPrice)),
+  );
+  const total = items.reduce(
+    (sum, item) => sum + scaled(item.unitPrice, places) * BigInt(item.qty),
+    0n,
+  );
+  if (total !== scaled(amount, places)) {
+    const digits = total.toString().padStart(places + 1, '0');
+    const readable = places ? `${digits.slice(0, -places)}.${digits.slice(-places)}` : digits;
+    throw new Error(
+      `Order items add up to ${readable} but the order amount is ${amount}; PayPal rejects a mismatched breakdown.`,
+    );
+  }
+};
+
 export interface PayPalProviderOptions {
   clientId: string;
   clientSecret: string;
-  webhookId: string;
+  /** Only needed to verify webhooks; checkout-only callers can leave it unset. */
+  webhookId?: string;
   environment?: 'sandbox' | 'live';
   fetch?: typeof fetch;
 }
@@ -35,8 +80,8 @@ export class PayPalProvider implements PaymentProvider {
   private accessToken?: { value: string; expiresAt: number };
 
   constructor(private readonly options: PayPalProviderOptions) {
-    if (!options.clientId || !options.clientSecret || !options.webhookId) {
-      throw new Error('PayPal client credentials and webhook ID are required');
+    if (!options.clientId || !options.clientSecret) {
+      throw new Error('PayPal client credentials are required');
     }
     this.baseUrl =
       options.environment === 'live'
@@ -46,6 +91,7 @@ export class PayPalProvider implements PaymentProvider {
   }
 
   async createCheckout(input: Parameters<PaymentProvider['createCheckout']>[0]) {
+    assertItemsMatchAmount(input.items, input.amount);
     const response = await this.api<PayPalResponse>('/v2/checkout/orders', {
       method: 'POST',
       headers: { 'PayPal-Request-Id': input.idempotencyKey },
@@ -55,7 +101,13 @@ export class PayPalProvider implements PaymentProvider {
           {
             reference_id: input.orderId,
             custom_id: input.orderId,
-            amount: { currency_code: input.currency, value: input.amount },
+            amount: {
+              currency_code: input.currency,
+              value: input.amount,
+              breakdown: {
+                item_total: { currency_code: input.currency, value: input.amount },
+              },
+            },
             items: input.items.map((item) => ({
               name: item.name,
               quantity: String(item.qty),
@@ -101,6 +153,9 @@ export class PayPalProvider implements PaymentProvider {
   }
 
   async verifyWebhook(headers: Record<string, string>, rawBody: string) {
+    if (!this.options.webhookId) {
+      throw new Error('A PayPal webhook ID is required to verify webhooks');
+    }
     let event: PayPalWebhookEvent;
     try {
       event = JSON.parse(rawBody) as PayPalWebhookEvent;
@@ -136,30 +191,15 @@ export class PayPalProvider implements PaymentProvider {
     const providerRef =
       event.resource?.supplementary_data?.related_ids?.order_id ??
       event.resource?.id;
-    if (verified.verification_status !== 'SUCCESS' || !event.id || !providerRef) {
-      return { valid: false };
-    }
-    const type = event.event_type ?? '';
-    let status: PaymentStatus;
-    if (type === 'PAYMENT.CAPTURE.COMPLETED') {
-      status = 'paid';
-    } else if (
-      type === 'PAYMENT.CAPTURE.DENIED' ||
-      type === 'PAYMENT.CAPTURE.DECLINED'
-    ) {
-      status = 'failed';
-    } else if (
-      type === 'CHECKOUT.ORDER.APPROVED' ||
-      type === 'CHECKOUT.ORDER.CREATED' ||
-      type === 'PAYMENT.CAPTURE.PENDING'
-    ) {
-      status = 'pending';
-    } else {
-      return { valid: false };
-    }
+    // `valid` answers the signature question only. A verified event we cannot
+    // identify is malformed, not forged, so it is reported separately.
+    if (verified.verification_status !== 'SUCCESS') return { valid: false };
+    if (!event.id || !providerRef) return { valid: true };
+    const eventType = event.event_type ?? '';
+    const status = WEBHOOK_EVENT_STATUS[eventType];
     return {
       valid: true,
-      event: { eventId: event.id, providerRef, status },
+      event: { eventId: event.id, providerRef, eventType, ...(status ? { status } : {}) },
     };
   }
 
