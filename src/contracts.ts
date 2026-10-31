@@ -13,6 +13,18 @@ export interface PaymentItem {
   unitPrice: string;
 }
 
+/** A merchant's review card. The model may propose an order, but only the
+ * signed-in merchant can approve it through the commerce API. */
+export interface ApprovalEvent {
+  orderId: string;
+  amount: string;
+  currency: string;
+  fee: { amount: string; currency: string };
+  customer: { name: string; contact: string; language: string | null };
+  items: PaymentItem[];
+  merchantLanguage: string;
+}
+
 export interface PaymentProvider {
   id: 'paypal';
   createCheckout(input: {
