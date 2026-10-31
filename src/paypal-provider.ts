@@ -20,10 +20,45 @@ type PayPalWebhookEvent = {
   };
 };
 
+const decimalPlaces = (value: string) => (value.split('.')[1] ?? '').length;
+
+const scaled = (value: string, places: number) => {
+  const [whole, fraction = ''] = value.split('.');
+  return BigInt(whole + fraction.padEnd(places, '0'));
+};
+
+/**
+ * PayPal rejects a purchase unit that lists `items` without
+ * `amount.breakdown.item_total`, so the breakdown is required here. The items
+ * must add up to the order amount exactly; decimal strings are compared as
+ * integers so no float rounding can creep in.
+ */
+const assertItemsMatchAmount = (
+  items: { qty: number; unitPrice: string }[],
+  amount: string,
+) => {
+  const places = Math.max(
+    decimalPlaces(amount),
+    ...items.map((item) => decimalPlaces(item.unitPrice)),
+  );
+  const total = items.reduce(
+    (sum, item) => sum + scaled(item.unitPrice, places) * BigInt(item.qty),
+    0n,
+  );
+  if (total !== scaled(amount, places)) {
+    const digits = total.toString().padStart(places + 1, '0');
+    const readable = places ? `${digits.slice(0, -places)}.${digits.slice(-places)}` : digits;
+    throw new Error(
+      `Order items add up to ${readable} but the order amount is ${amount}; PayPal rejects a mismatched breakdown.`,
+    );
+  }
+};
+
 export interface PayPalProviderOptions {
   clientId: string;
   clientSecret: string;
-  webhookId: string;
+  /** Only needed to verify webhooks; checkout-only callers can leave it unset. */
+  webhookId?: string;
   environment?: 'sandbox' | 'live';
   fetch?: typeof fetch;
 }
@@ -35,8 +70,8 @@ export class PayPalProvider implements PaymentProvider {
   private accessToken?: { value: string; expiresAt: number };
 
   constructor(private readonly options: PayPalProviderOptions) {
-    if (!options.clientId || !options.clientSecret || !options.webhookId) {
-      throw new Error('PayPal client credentials and webhook ID are required');
+    if (!options.clientId || !options.clientSecret) {
+      throw new Error('PayPal client credentials are required');
     }
     this.baseUrl =
       options.environment === 'live'
@@ -46,6 +81,7 @@ export class PayPalProvider implements PaymentProvider {
   }
 
   async createCheckout(input: Parameters<PaymentProvider['createCheckout']>[0]) {
+    assertItemsMatchAmount(input.items, input.amount);
     const response = await this.api<PayPalResponse>('/v2/checkout/orders', {
       method: 'POST',
       headers: { 'PayPal-Request-Id': input.idempotencyKey },
@@ -55,7 +91,13 @@ export class PayPalProvider implements PaymentProvider {
           {
             reference_id: input.orderId,
             custom_id: input.orderId,
-            amount: { currency_code: input.currency, value: input.amount },
+            amount: {
+              currency_code: input.currency,
+              value: input.amount,
+              breakdown: {
+                item_total: { currency_code: input.currency, value: input.amount },
+              },
+            },
             items: input.items.map((item) => ({
               name: item.name,
               quantity: String(item.qty),
@@ -101,6 +143,9 @@ export class PayPalProvider implements PaymentProvider {
   }
 
   async verifyWebhook(headers: Record<string, string>, rawBody: string) {
+    if (!this.options.webhookId) {
+      throw new Error('A PayPal webhook ID is required to verify webhooks');
+    }
     let event: PayPalWebhookEvent;
     try {
       event = JSON.parse(rawBody) as PayPalWebhookEvent;
