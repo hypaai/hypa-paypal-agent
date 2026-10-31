@@ -1,6 +1,6 @@
 {
   "name": "@hypa/paypal-agent",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Open payment provider contracts and PayPal Orders v2 adapter",
   "type": "module",
   "license": "MIT",

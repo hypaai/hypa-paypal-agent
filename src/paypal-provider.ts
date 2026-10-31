@@ -20,6 +20,16 @@ type PayPalWebhookEvent = {
   };
 };
 
+/** Event types that move a payment. Anything else verifies but has no status. */
+const WEBHOOK_EVENT_STATUS: Record<string, PaymentStatus> = {
+  'PAYMENT.CAPTURE.COMPLETED': 'paid',
+  'PAYMENT.CAPTURE.DENIED': 'failed',
+  'PAYMENT.CAPTURE.DECLINED': 'failed',
+  'CHECKOUT.ORDER.APPROVED': 'pending',
+  'CHECKOUT.ORDER.CREATED': 'pending',
+  'PAYMENT.CAPTURE.PENDING': 'pending',
+};
+
 const decimalPlaces = (value: string) => (value.split('.')[1] ?? '').length;
 
 const scaled = (value: string, places: number) => {
@@ -181,30 +191,15 @@ export class PayPalProvider implements PaymentProvider {
     const providerRef =
       event.resource?.supplementary_data?.related_ids?.order_id ??
       event.resource?.id;
-    if (verified.verification_status !== 'SUCCESS' || !event.id || !providerRef) {
-      return { valid: false };
-    }
-    const type = event.event_type ?? '';
-    let status: PaymentStatus;
-    if (type === 'PAYMENT.CAPTURE.COMPLETED') {
-      status = 'paid';
-    } else if (
-      type === 'PAYMENT.CAPTURE.DENIED' ||
-      type === 'PAYMENT.CAPTURE.DECLINED'
-    ) {
-      status = 'failed';
-    } else if (
-      type === 'CHECKOUT.ORDER.APPROVED' ||
-      type === 'CHECKOUT.ORDER.CREATED' ||
-      type === 'PAYMENT.CAPTURE.PENDING'
-    ) {
-      status = 'pending';
-    } else {
-      return { valid: false };
-    }
+    // `valid` answers the signature question only. A verified event we cannot
+    // identify is malformed, not forged, so it is reported separately.
+    if (verified.verification_status !== 'SUCCESS') return { valid: false };
+    if (!event.id || !providerRef) return { valid: true };
+    const eventType = event.event_type ?? '';
+    const status = WEBHOOK_EVENT_STATUS[eventType];
     return {
       valid: true,
-      event: { eventId: event.id, providerRef, status },
+      event: { eventId: event.id, providerRef, eventType, ...(status ? { status } : {}) },
     };
   }
 

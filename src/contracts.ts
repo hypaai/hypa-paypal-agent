@@ -42,6 +42,13 @@ export interface PaymentProvider {
     idempotencyKey: string,
   ): Promise<{ status: Exclude<PaymentStatus, 'pending'> }>;
   getStatus(providerRef: string): Promise<PaymentStatus>;
+  /**
+   * Checks the transmission signature. `valid` answers only that question: an
+   * event whose signature verifies is valid even when this library does not
+   * map it to a payment status, so a caller can tell a forged event from one
+   * it simply does not act on. `status` is set only for the event types that
+   * move a payment; `eventType` is always the provider's own name for it.
+   */
   verifyWebhook(
     headers: Record<string, string>,
     rawBody: string,
@@ -50,7 +57,8 @@ export interface PaymentProvider {
     event?: {
       eventId: string;
       providerRef: string;
-      status: PaymentStatus;
+      eventType: string;
+      status?: PaymentStatus;
     };
   }>;
 }
